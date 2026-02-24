@@ -1,0 +1,94 @@
+services:
+
+  # Definimos el broker MQTT, cambiando de version para el TLS mejorado
+  mosquitto:
+    image: eclipse-mosquitto:2.0.18  
+    # Mismo identificador que el usuario del host, para poder leer los .key protegidos
+    user: "1000:1000"
+
+    #Cambiamos a puerto estándar para MQTT seguro sobre TLS.
+    ports:
+      - "8883:8883"     
+    
+    # Montamos todos los certificados dentro del contenedor del broker.
+    #Se hace uso del read only para impedir que se hagan cambios            
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./certs:/mosquitto/certs:ro
+
+  # Configuramos la Base de Datos
+  base_datos:
+    image: postgres:15
+    container_name: base_datos
+    environment:
+      POSTGRES_DB: invernadero_db
+      POSTGRES_USER: deusto
+      POSTGRES_PASSWORD: deusto
+    ports:
+      - "5432:5432"
+
+    # Coge todo lo que PostgreSQL guarde en su carpeta interna y hace una copia de seguridad.
+    volumes:
+      - volumen_postgres:/var/lib/postgresql/data
+
+  #  Produce los valores del sensor
+  sensor_tierra:
+    build: ./productor
+    container_name: monitor_suelo_01
+    environment:
+    # Conexión con el broker
+      HOST_BROKER: mosquitto
+      PUERTO_BROKER: "8883"           # Puerto TLS
+      TEMA_PUBLICACION: "invernadero/sector_1/suelo"
+      ID_SENSOR: "sensor_suelo_01"
+      INTERVALO: "5"
+      
+      # Datos de simulación
+      TEMP_IDEAL: "18.0"
+      HUMEDAD_IDEAL: "75.0"
+      LUZ_IDEAL: "200"
+      PH_IDEAL: "6.0"
+
+      # Rutas de certificados dentro del contenedor
+      RUTA_CA: "/app/certs/ca.crt"
+      RUTA_CERT: "/app/certs/cliente_sensor.crt"
+      RUTA_KEY: "/app/certs/cliente_sensor.key"
+    
+    # Montamos los certificados del cliente sensor
+    volumes:
+      - ./certs:/app/certs:ro
+    depends_on:
+      - mosquitto
+
+  # Recoge y almacena los datos del sensor
+  cerebro_datos:
+    build: ./consumidor
+    container_name: cerebro_datos
+    environment:
+      # Se suscribe a MQTT
+      HOST_BROKER: mosquitto
+      PUERTO_BROKER: "8883"           # Puerto TLS
+      TEMA_SUSCRIPCION: "invernadero/#"
+
+      # Base de Datos
+      HOST_BD: base_datos
+      NOMBRE_BD: invernadero_db
+      USUARIO_BD: deusto
+      CLAVE_BD: deusto
+
+      #Aparecen los prints al instante
+      PYTHONUNBUFFERED: "1"
+
+      # Rutas de certificados dentro del contenedor
+      RUTA_CA: "/app/certs/ca.crt"
+      RUTA_CERT: "/app/certs/cliente_cerebro.crt"
+      RUTA_KEY: "/app/certs/cliente_cerebro.key"
+    volumes:
+      # Montamos los certificados del cliente cerebro
+      - ./certs:/app/certs:ro
+    depends_on:
+      - mosquitto
+      - base_datos
+
+volumes:
+  volumen_postgres:
